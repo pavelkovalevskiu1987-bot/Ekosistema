@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Экосистема: Входные и Межкомнатные двери</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Изоляция печати: при выводе на принтер скрывается весь интерфейс, кроме печатного шлюза */
+    @media print {
+      #app-ui-root { display: none !important; }
+      #app-print-root { display: block !important; width: 100%; margin: 0; padding: 0; }
+      @page { size: A4; margin: 10mm; }
+      body { background: #fff !important; color: #000 !important; }
+    }
+    @media screen {
+      #app-print-root { display: none; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen">
+
+  <!-- ИНТЕРФЕЙС ПРИЛОЖЕНИЯ (Скрывается при печати) -->
+  <div id="app-ui-root" class="flex flex-col min-h-screen">
+    
+    <!-- Верхняя панель: Выбор клиента и Бэкап -->
+    <header class="bg-slate-900 text-white px-4 py-3 shadow-md flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <span class="font-bold text-lg tracking-wide text-amber-400">DOOR ECOSYSTEM</span>
+        <select id="project-selector" class="bg-slate-800 border border-slate-700 text-sm rounded px-3 py-1.5 text-white">
+          <!-- Заполняется автоматически -->
+        </select>
+        <button onclick="AppCore.createNewProject()" class="bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold px-3 py-1.5 rounded transition">
+          + Новый клиент
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2 text-xs">
+        <button onclick="AppCore.exportCurrentProject()" class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded">
+          Скачать JSON
+        </button>
+        <label class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded cursor-pointer">
+          Загрузить JSON
+          <input type="file" accept=".json" class="hidden" onchange="AppCore.importProject(event)">
+        </label>
+        <button onclick="AppCore.deleteCurrentProject()" class="bg-rose-700 hover:bg-rose-600 px-3 py-1.5 rounded ml-2">
+          Удалить
+        </button>
+      </div>
+    </header>
+
+    <!-- Навигация по веткам и блокам -->
+    <nav class="bg-white border-b border-slate-200 px-4 py-2 shadow-sm">
+      <div class="flex flex-wrap items-center gap-1.5" id="nav-tabs">
+        <!-- Кнопки навигации рендерятся ядром автоматически -->
+      </div>
+    </nav>
+
+    <!-- Рабочая область: Изолированные контейнеры для всех 11 блоков -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4">
+      <div id="slot-client" class="block-slot"></div>
+      
+      <!-- Ветка 1: Входные двери -->
+      <div id="slot-ext_measure" class="block-slot hidden"></div>
+      <div id="slot-ext_invoice" class="block-slot hidden"></div>
+      <div id="slot-ext_contract" class="block-slot hidden"></div>
+      <div id="slot-ext_act" class="block-slot hidden"></div>
+
+      <!-- Ветка 2: Межкомнатные двери -->
+      <div id="slot-int_measure" class="block-slot hidden"></div>
+      <div id="slot-int_calc" class="block-slot hidden"></div>
+      <div id="slot-int_invoice" class="block-slot hidden"></div>
+      <div id="slot-int_contract" class="block-slot hidden"></div>
+      <div id="slot-int_factory" class="block-slot hidden"></div>
+      <div id="slot-int_act" class="block-slot hidden"></div>
+    </main>
+  </div>
+
+  <!-- ИЗОЛИРОВАННЫЙ ШЛЮЗ ДЛЯ ПЕЧАТИ ДОКУМЕНТОВ А4 -->
+  <div id="app-print-root"></div>
+
+  <!-- ЯДРО ЭКОСИСТЕМЫ (НЕ ТРОГАТЬ ПРИ РАЗРАБОТКЕ БЛОКОВ) -->
+  <script>
+    const STORAGE_KEY = 'DOOR_ECOSYSTEM_PROJECTS_V1';
+
+    const BLOCK_CONFIG = [
+      { id: 'client',       branch: 'common',   title: '1. Карточка клиента' },
+      // Ветка 1: Входные
+      { id: 'ext_measure',  branch: 'entrance', title: '2. Замер ВД' },
+      { id: 'ext_invoice',  branch: 'entrance', title: '3. Счёт-фактура ВД' },
+      { id: 'ext_contract', branch: 'entrance', title: '4. Договор ВД' },
+      { id: 'ext_act',      branch: 'entrance', title: '5. Акт ВД' },
+      // Ветка 2: Межкомнатные
+      { id: 'int_measure',  branch: 'interior', title: '6. Замер МД' },
+      { id: 'int_calc',     branch: 'interior', title: '7. Расчёт и КП' },
+      { id: 'int_invoice',  branch: 'interior', title: '8а. Счёт-фактура МД' },
+      { id: 'int_contract', branch: 'interior', title: '8б. Договор МД' },
+      { id: 'int_factory',  branch: 'interior', title: '9. Заявка на фабрику' },
+      { id: 'int_act',      branch: 'interior', title: '10. Акт МД' }
+    ];
+
+    window.AppModules = {};
+
+    window.AppCore = {
+      projects: {},
+      currentId: null,
+      activeTab: 'client',
+
+       createDefaultSchema(id) {
+        return {
+          id: id,
+          updatedAt: new Date().toISOString(),
+          client: {
+            fullName: '', phone: '', address: '', floor: '',
+            hasElevator: false, elevatorType: 'none', // none | passenger | cargo
+            passport: { series: '', number: '', issuedBy: '', issuedDate: '', idNumber: '', registration: '' },
+            orderType: 'both' // entrance | interior | both
+          },
+          ext_measure: {},
+          ext_invoice: {},
+          ext_contract: {},
+          ext_act: {},
+          int_measure: { openings: [] },
+          int_calc: { items: [], totals: {} },
+          int_invoice: {},
+          int_contract: {},
+          int_factory: {},
+          int_act: {}
+        };
+      },
+
+      init() {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        this.projects = raw ? JSON.parse(raw) : {};
+        const ids = Object.keys(this.projects);
+        if (ids.length === 0) {
+          this.createNewProject();
+        } else {
+          this.currentId = ids[0];
+          this.refreshUI();
+        }
+      },
+
+      saveToDisk() {
+        if (this.currentId && this.projects[this.currentId]) {
+          this.projects[this.currentId].updatedAt = new Date().toISOString();
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.projects));
+        this.renderProjectSelector();
+      },
+
+      getState(sectionKey) {
+        const proj = this.projects[this.currentId];
+        if (!proj) return {};
+        return sectionKey ? (proj[sectionKey] || {}) : proj;
+      },
+
+      updateState(sectionKey, newData) {
+        const proj = this.projects[this.currentId];
+        if (!proj) return;
+        proj[sectionKey] = { ...proj[sectionKey], ...newData };
+        this.saveToDisk();
+        if (sectionKey === 'client') this.renderNavTabs();
+        window.dispatchEvent(new CustomEvent('ecosystem:stateChanged', {
+          detail: { section: sectionKey, state: proj }
+        }));
+      },
+
+      registerModule(blockId, moduleObj) {
+        window.AppModules[blockId] = moduleObj;
+      },
+
+      switchTab(blockId) {
+        this.activeTab = blockId;
+        document.querySelectorAll('.block-slot').forEach(el => el.classList.add('hidden'));
+        const targetSlot = document.getElementById(`slot-${blockId}`);
+        if (targetSlot) {
+          targetSlot.classList.remove('hidden');
+          const mod = window.AppModules[blockId];
+          if (mod && typeof mod.render === 'function') {
+            mod.render(targetSlot, this.getState());
+          } else {
+            targetSlot.innerHTML = `
+              <div class="bg-white p-8 rounded-lg shadow border border-slate-200 text-center">
+                <h2 class="text-xl font-bold text-slate-700 mb-2">Модуль «${blockId}» ещё не подключён</h2>
+                <p class="text-sm text-slate-500">Сгенерируйте скрипт этого блока и вставьте его в низ файла index.html.</p>
+              </div>`;
+          }
+        }
+        this.renderNavTabs();
+      },
+
+      printHtml(htmlContent) {
+        const printRoot = document.getElementById('app-print-root');
+        printRoot.innerHTML = htmlContent;
+        setTimeout(() => { window.print(); }, 150);
+      },
+
+      createNewProject() {
+        const id = 'proj_' + Date.now();
+        this.projects[id] = this.createDefaultSchema(id);
+        this.currentId = id;
+        this.saveToDisk();
+        this.switchTab('client');
+      },
+
+      deleteCurrentProject() {
+        if (!confirm('Удалить текущего клиента и все его документы?')) return;
+        delete this.projects[this.currentId];
+        const ids = Object.keys(this.projects);
+        if (ids.length === 0) {
+          this.createNewProject();
+        } else {
+          this.currentId = ids[0];
+          this.saveToDisk();
+          this.refreshUI();
+        }
+      },
+
+      renderProjectSelector() {
+        const sel = document.getElementById('project-selector');
+        sel.innerHTML = Object.values(this.projects).map(p => {
+          const name = p.client?.fullName?.trim() || 'Новый клиент (без имени)';
+          const addr = p.client?.address ? ` — ${p.client.address}` : '';
+          return `<option value="${p.id}" ${p.id === this.currentId ? 'selected' : ''}>${name}${addr}</option>`;
+        }).join('');
+        sel.onchange = (e) => {
+          this.currentId = e.target.value;
+          this.refreshUI();
+        };
+      },
+
+      renderNavTabs() {
+        const nav = document.getElementById('nav-tabs');
+        const orderType = this.getState('client')?.orderType || 'both';
+        
+        nav.innerHTML = BLOCK_CONFIG.filter(b => {
+          if (b.branch === 'common') return true;
+          if (orderType === 'both') return true;
+          return b.branch === orderType;
+        }).map(b => {
+          const isActive = this.activeTab === b.id;
+          const branchColor = b.branch === 'common' 
+            ? (isActive ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300')
+            : b.branch === 'entrance'
+              ? (isActive ? 'bg-blue-700 text-white' : 'bg-blue-50 text-blue-800 border border-blue-200 hover:bg-blue-100')
+              : (isActive ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100');
+          return `<button onclick="AppCore.switchTab('${b.id}')" class="px-3 py-1.5 rounded text-xs font-semibold transition ${branchColor}">${b.title}</button>`;
+        }).join('');
+      },
+
+      refreshUI() {
+        this.renderProjectSelector();
+        this.switchTab(this.activeTab);
+      },
+
+      exportCurrentProject() {
+        const proj = this.getState();
+        const name = (proj.client?.fullName || 'client').replace(/\s+/g, '_');
+        const blob = new Blob([JSON.stringify(proj, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${name}_${new Date().toISOString().slice(0,10)}.json`;
+        a.click();
+      },
+
+      importProject(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = JSON.parse(e.target.result);
+            const id = data.id || ('proj_' + Date.now());
+            data.id = id;
+            this.projects[id] = data;
+            this.currentId = id;
+            this.saveToDisk();
+            this.refreshUI();
+          } catch (err) {
+            alert('Ошибка чтения JSON файла');
+          }
+        };
+        reader.readAsText(file);
+      }
+    };
+
+    window.addEventListener('DOMContentLoaded', () => AppCore.init());
+  </script>
+
+  <!-- ===================================================================== -->
+  <!-- ЗОНА ПОДКЛЮЧЕНИЯ БЛОКОВ (Каждый блок вставляется отдельным <script>)  -->
+  <!--<script>
+(function() {
+  AppCore.registerModule('client', {
+    render(container, fullState) {
+      const c = fullState.client || {};
+      const p = c.passport || {};
+      const orderType = c.orderType || 'both';
+      const elevatorType = c.elevatorType || 'none';
+
+      container.innerHTML = `
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 md:p-6 max-w-4xl mx-auto">
+          
+          <!-- Заголовок и статус сохранения -->
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-4 mb-6">
+            <div>
+              <h2 class="text-xl font-bold text-slate-800">1. Карточка клиента</h2>
+              <p class="text-xs text-slate-500 mt-0.5">Общие данные для всех веток, замеров, счетов-фактур и договоров</p>
+            </div>
+            <span id="client-save-badge" class="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full opacity-0 transition-opacity duration-300">
+              ✓ Сохранено в базу
+            </span>
+          </div>
+
+          <!-- Выбор ветки заказа -->
+          <div class="mb-6">
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Направление заказа (активные ветки)</label>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5" id="client-order-type-group">
+              <button type="button" data-branch="entrance"
+                class="branch-btn py-2.5 px-3 rounded-lg border text-sm font-semibold transition flex items-center justify-center gap-2 ${orderType === 'entrance' ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}">
+                🚪 Только входные
+              </button>
+              <button type="button" data-branch="interior"
+                class="branch-btn py-2.5 px-3 rounded-lg border text-sm font-semibold transition flex items-center justify-center gap-2 ${orderType === 'interior' ? 'bg-amber-600 text-white border-amber-600 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}">
+                🏠 Только межкомнатные
+              </button>
+              <button type="button" data-branch="both"
+                class="branch-btn py-2.5 px-3 rounded-lg border text-sm font-semibold transition flex items-center justify-center gap-2 ${orderType === 'both' ? 'bg-slate-900 text-white border-slate-900 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'}">
+                🔄 Входные + Межкомнатные
+              </button>
+            </div>
+          </div>
+
+          <!-- Контакты и Адрес объекта -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            
+            <!-- ФИО -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">ФИО клиента полностью</label>
+              <input type="text" id="f-fullName" value="${this.esc(c.fullName)}" placeholder="Иванов Иван Иванович"
+                class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 focus:outline-none">
+            </div>
+
+            <!-- Телефон + Кнопка позвонить -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Номер телефона</label>
+              <div class="flex gap-2">
+                <input type="tel" id="f-phone" value="${this.esc(c.phone)}" placeholder="+375 (29) 000-00-00"
+                  class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 focus:outline-none">
+                <a id="btn-call-phone" href="${this.getTelHref(c.phone)}"
+                  class="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-lg text-sm font-semibold flex items-center gap-1.5 shrink-0 transition shadow-sm ${c.phone ? '' : 'opacity-50 pointer-events-none'}">
+                  <span>📞</span> <span class="hidden sm:inline">Позвонить</span>
+                </a>
+              </div>
+            </div>
+
+            <!-- Адрес + Кнопка Яндекс Карты -->
+            <div class="md:col-span-2">
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Адрес объекта (установки)</label>
+              <div class="flex gap-2">
+                <input type="text" id="f-address" value="${this.esc(c.address)}" placeholder="г. Борисов, ул. Дёмина, д. 39, кв. 1"
+                  class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 focus:outline-none">
+                <a id="btn-yandex-map" href="${this.getMapHref(c.address)}" target="_blank" rel="noopener noreferrer"
+                  class="bg-amber-500 hover:bg-amber-400 text-slate-950 px-3.5 py-2 rounded-lg text-sm font-semibold flex items-center gap-1.5 shrink-0 transition shadow-sm ${c.address ? '' : 'opacity-50 pointer-events-none'}">
+                  <span>📍</span> <span class="hidden sm:inline">Яндекс Карты</span>
+                </a>
+              </div>
+            </div>
+
+            <!-- Этаж -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Этаж</label>
+              <input type="text" id="f-floor" value="${this.esc(c.floor)}" placeholder="Например: 4 (или Частный дом)"
+                class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 focus:outline-none">
+            </div>
+
+            <!-- Лифт и его тип -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-600 mb-1">Наличие и тип лифта</label>
+              <select id="f-elevatorType" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-slate-900 focus:outline-none">
+                <option value="none" ${elevatorType === 'none' ? 'selected' : ''}>Без лифта</option>
+                <option value="passenger" ${elevatorType === 'passenger' ? 'selected' : ''}>Пассажирский лифт</option>
+                <option value="cargo" ${elevatorType === 'cargo' ? 'selected' : ''}>Грузовой лифт</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Паспортные данные -->
+          <div class="border-t border-slate-200 pt-5">
+            <h3 class="text-sm font-bold text-slate-700 uppercase tracking-wider mb-3">Паспортные данные (для договора и банка)</h3>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <!-- Серия и номер паспорта -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Серия и номер паспорта</label>
+                <input type="text" id="f-passportNumber" value="${this.esc(p.seriesNumber || ((p.series || '') + (p.number || '')))}" placeholder="MC 1234567"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm uppercase focus:ring-2 focus:ring-slate-900 focus:outline-none">
+              </div>
+
+              <!-- Дата выдачи -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Дата выдачи документа</label>
+                <input type="date" id="f-issuedDate" value="${this.esc(p.issuedDate)}"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 focus:outline-none">
+              </div>
+
+              <!-- Кем выдан -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-600 mb-1">Орган, выдавший документ</label>
+                <input type="text" id="f-issuedBy" value="${this.esc(p.issuedBy)}" placeholder="Борисовским РУВД Минской обл."
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 focus:outline-none">
+              </div>
+
+              <!-- Место прописки -->
+              <div class="md:col-span-3">
+                <div class="flex items-center justify-between mb-1">
+                  <label class="block text-xs font-semibold text-slate-600">Место прописки (регистрации) по паспорту</label>
+                  <button type="button" id="btn-copy-address" class="text-xs text-blue-600 hover:text-blue-800 font-medium">
+                    Скопировать из адреса объекта ↑
+                  </button>
+                </div>
+                <input type="text" id="f-registration" value="${this.esc(p.registration)}" placeholder="г. Борисов, ул. ..."
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-slate-900 focus:outline-none">
+              </div>
+            </div>
+          </div>
+
+        </div>
+      `;
+
+      this.bindEvents(container);
+    },
+
+    bindEvents(container) {
+      let currentOrderType = AppCore.getState('client').orderType || 'both';
+
+      const collectAndSave = () => {
+        const fullName = container.querySelector('#f-fullName').value.trim();
+        const phone = container.querySelector('#f-phone').value.trim();
+        const address = container.querySelector('#f-address').value.trim();
+        const floor = container.querySelector('#f-floor').value.trim();
+        const elevatorType = container.querySelector('#f-elevatorType').value;
+        const seriesNumber = container.querySelector('#f-passportNumber').value.trim().toUpperCase();
+        const issuedDate = container.querySelector('#f-issuedDate').value;
+        const issuedBy = container.querySelector('#f-issuedBy').value.trim();
+        const registration = container.querySelector('#f-registration').value.trim();
+
+        // Обновляем живые ссылки на кнопках звонка и Яндекс.Карт
+        const callBtn = container.querySelector('#btn-call-phone');
+        callBtn.href = this.getTelHref(phone);
+        callBtn.classList.toggle('opacity-50', !phone);
+        callBtn.classList.toggle('pointer-events-none', !phone);
+
+        const mapBtn = container.querySelector('#btn-yandex-map');
+        mapBtn.href = this.getMapHref(address);
+        mapBtn.classList.toggle('opacity-50', !address);
+        mapBtn.classList.toggle('pointer-events-none', !address);
+
+        AppCore.updateState('client', {
+          fullName,
+          phone,
+          address,
+          floor,
+          hasElevator: elevatorType !== 'none',
+          elevatorType,
+          orderType: currentOrderType,
+          passport: {
+            seriesNumber,
+            issuedDate,
+            issuedBy,
+            registration
+          }
+        });
+
+        // Показываем индикатор сохранения
+        const badge = container.querySelector('#client-save-badge');
+        if (badge) {
+          badge.classList.remove('opacity-0');
+          clearTimeout(this._saveTimer);
+          this._saveTimer = setTimeout(() => badge.classList.add('opacity-0'), 1200);
+        }
+      };
+
+      // Автосохранение при вводе в любое поле
+      container.querySelectorAll('input, select').forEach(input => {
+        input.addEventListener('input', collectAndSave);
+        input.addEventListener('change', collectAndSave);
+      });
+
+      // Переключение ветки заказа (Входные / Межкомнатные / Обе)
+      container.querySelectorAll('.branch-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentOrderType = btn.dataset.branch;
+          collectAndSave();
+          // Перерисовываем карточку, чтобы обновить активную кнопку ветки
+          this.render(container, AppCore.getState());
+        });
+      });
+
+      // Кнопка быстрого копирования адреса объекта в прописку
+      const copyAddrBtn = container.querySelector('#btn-copy-address');
+      if (copyAddrBtn) {
+        copyAddrBtn.addEventListener('click', () => {
+          const addr = container.querySelector('#f-address').value;
+          if (addr) {
+            container.querySelector('#f-registration').value = addr;
+            collectAndSave();
+          }
+        });
+      }
+    },
+
+    getTelHref(phone) {
+      if (!phone) return '#';
+      const cleaned = phone.replace(/[^\d+]/g, '');
+      return `tel:${cleaned}`;
+    },
+
+    getMapHref(address) {
+      if (!address) return '#';
+      return `https://yandex.by/maps/?text=${encodeURIComponent(address)}`;
+    },
+
+    esc(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+  });
+
+  // Если приложение уже загружено и открыта вкладка клиента — сразу отрисовываем
+  if (window.AppCore && AppCore.activeTab === 'client') {
+    AppCore.switchTab('client');
+  }
+})();
+</script>
+  ===================================================================== -->
+
+</body>
+</html>

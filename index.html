@@ -535,42 +535,56 @@
   }
 })();
 </script>
-  <script>
+<script>
 (function() {
-  // Генерация сеток размеров (шаг 30 мм)
-  // База 860 и 950 кратны 30 в единой сетке (860 + 3*30 = 950)
+  // Сетки размеров новой двери (база 860 / 950 × 2050, шаг ±30 мм)
   const WIDTH_OPTIONS = [];
   for (let w = 680; w <= 1160; w += 30) WIDTH_OPTIONS.push(w);
 
   const HEIGHT_OPTIONS = [];
   for (let h = 1810; h <= 2290; h += 30) HEIGHT_OPTIONS.push(h);
 
-  // Сетки вылета наличника
+  // Сетки вылета наличника (67 мм — единый стандарт по умолчанию)
   const CASING_OUTDOOR = [17, 27, 37, 47, 57, 67, 77, 87, 97];
   const CASING_APARTMENT = [15, 25, 35, 45, 55, 67, 75, 85, 95, 105];
 
+  // Справочник сторон открывания со схемами
+  const OPENING_SIDES = [
+    { id: 'Наружное Левое',   short: 'Нар. Левое',   hinge: 'left',  dir: 'out' },
+    { id: 'Наружное Правое',  short: 'Нар. Правое',  hinge: 'right', dir: 'out' },
+    { id: 'Внутреннее Левое', short: 'Внутр. Левое', hinge: 'left',  dir: 'in'  },
+    { id: 'Внутреннее Правое',short: 'Внутр. Правое',hinge: 'right', dir: 'in'  }
+  ];
+
   AppCore.registerModule('ext_measure', {
+    // По умолчанию разделы 2, 3 и 5 всегда свёрнуты
+    uiCollapsed: {
+      oldDoor: true,
+      slope: true,
+      casing: true
+    },
+
     render(container, fullState) {
       const c = fullState.client || {};
       const m = fullState.ext_measure || {};
       const photos = Array.isArray(m.photos) ? m.photos : [];
       const diffLevel = !!m.diffLevel;
 
-      // Выбираем сетку наличника в зависимости от типа двери (если выбран)
-      const casingList = m.doorCategory === 'outdoor' ? CASING_OUTDOOR : CASING_APARTMENT;
+      const hasOldDoorData = !!(m.oldWidth || m.oldHeight || m.oldFrameDepth || m.oldSide);
+      const hasSlopeData = !!(m.slopeWidth || m.slopeHeight);
+      const hasCasingData = !!(m.doorCategory || m.casingProjection);
 
       container.innerHTML = `
-        <div class="max-w-5xl mx-auto space-y-5">
+        <div class="max-w-6xl mx-auto space-y-4">
 
-          <!-- Верхняя панель: Сводка клиента + Кнопки печати и OCR -->
+          <!-- Верхняя панель: Заголовок, Печать и Распознавание бланка -->
           <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-5">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3 mb-3">
               <div>
                 <h2 class="text-xl font-bold text-slate-800">2. Замер входной двери (Ветка 1 · Этап 1)</h2>
                 <p class="text-xs text-slate-500 mt-0.5">
                   Клиент: <strong class="text-slate-700">${this.esc(c.fullName || 'Не указан')}</strong> · 
-                  Адрес: <strong class="text-slate-700">${this.esc(c.address || 'Не указан')}</strong> · 
-                  Этаж: <strong class="text-slate-700">${this.esc(c.floor || '—')}</strong>
+                  Адрес: <strong class="text-slate-700">${this.esc(c.address || 'Не указан')}</strong>
                 </p>
               </div>
               <span id="ext-m-save-badge" class="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full opacity-0 transition-opacity duration-300">
@@ -578,7 +592,6 @@
               </span>
             </div>
 
-            <!-- Панель действий: Печать бланков и Загрузка фото бланка -->
             <div class="flex flex-wrap items-center gap-2">
               <button type="button" id="btn-print-blank-a5"
                 class="bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition shadow-sm">
@@ -591,247 +604,449 @@
               </button>
 
               <label class="bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 cursor-pointer transition shadow-sm ml-auto">
-                📷 Распознать фото бланка
-                <input type="file" id="input-ocr-sheet" accept="image/*" capture="environment" class="hidden">
+                📷 Загрузить фото рукописного бланка
+                <input type="file" id="input-ocr-sheet" accept="image/*" class="hidden">
               </label>
 
-              <button type="button" id="btn-ocr-settings" title="Настройка ключа для распознавания почерка"
+              <button type="button" id="btn-ocr-settings" title="API-ключ для распознавания рукописного текста"
                 class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs px-2.5 py-2 rounded-lg border border-slate-300 transition">
                 ⚙️ Ключ ИИ
               </button>
             </div>
 
-            <!-- Статус распознавания фото бланка -->
-            <div id="ocr-status-box" class="hidden mt-3 p-3 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-900 flex items-center justify-between">
+            <div id="ocr-status-box" class="hidden mt-3 p-3 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-900">
               <span id="ocr-status-text">Анализ снимка бланка...</span>
             </div>
           </div>
 
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <!-- Основная сетка: Слева — Поля ввода, Справа — Живая иллюстрация замера -->
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
             
-            <!-- БЛОК 1: РАЗМЕР ПРОЁМА -->
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-              <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-700">1. Размер проёма (мм)</h3>
-                <label class="flex items-center gap-1.5 text-xs font-medium text-slate-600 cursor-pointer">
-                  <input type="checkbox" id="m-diffLevel" ${diffLevel ? 'checked' : ''} class="rounded text-blue-600">
-                  Разный уровень пола (снаружи / внутри)
-                </label>
+            <!-- ЛЕВАЯ КОЛОНКА: ПАРАМЕТРЫ ЗАМЕРА (7 колонок) -->
+            <div class="lg:col-span-7 space-y-4">
+
+              <!-- 1. РАЗМЕР ПРОЁМА (Всегда открыт) -->
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-5">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <h3 class="text-sm font-bold uppercase tracking-wider text-slate-800">1. Размер проёма (мм)</h3>
+                  <label class="flex items-center gap-1.5 text-xs font-medium text-slate-600 cursor-pointer select-none">
+                    <input type="checkbox" id="m-diffLevel" ${diffLevel ? 'checked' : ''} class="rounded text-blue-600">
+                    В разных уровнях (снаружи и внутри)
+                  </label>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина проёма</label>
+                    <input type="number" id="m-openWidth" value="${this.esc(m.openWidth)}" placeholder=""
+                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                  </div>
+
+                  <div class="${diffLevel ? 'hidden' : ''}">
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">Высота проёма</label>
+                    <input type="number" id="m-openHeight" value="${this.esc(m.openHeight)}" placeholder=""
+                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                  </div>
+
+                  <div class="${diffLevel ? '' : 'hidden'}">
+                    <label class="block text-xs font-semibold text-blue-700 mb-1">Высота СНАРУЖИ</label>
+                    <input type="number" id="m-openHeightOut" value="${this.esc(m.openHeightOut)}" placeholder=""
+                      class="m-input w-full border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                  </div>
+
+                  <div class="${diffLevel ? '' : 'hidden'}">
+                    <label class="block text-xs font-semibold text-amber-700 mb-1">Высота ВНУТРИ</label>
+                    <input type="number" id="m-openHeightIn" value="${this.esc(m.openHeightIn)}" placeholder=""
+                      class="m-input w-full border border-amber-300 bg-amber-50/40 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-600 focus:outline-none">
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">Толщина стены</label>
+                    <input type="number" id="m-wallDepth" value="${this.esc(m.wallDepth)}" placeholder=""
+                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                  </div>
+                </div>
               </div>
 
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина проёма</label>
-                  <input type="number" id="m-openWidth" value="${this.esc(m.openWidth)}" placeholder=""
-                    class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
-                </div>
+              <!-- 2. СТАРАЯ ДВЕРЬ (По умолчанию свёрнута) -->
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <button type="button" data-toggle-sec="oldDoor"
+                  class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-slate-50 transition">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-bold uppercase tracking-wider text-slate-700">2. Старая дверь</span>
+                    ${hasOldDoorData ? `<span class="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full font-medium">Заполнено</span>` : `<span class="text-xs text-slate-400 font-normal">(нажмите, чтобы открыть)</span>`}
+                  </div>
+                  <span class="text-slate-400 text-sm font-bold">${this.uiCollapsed.oldDoor ? '▼' : '▲'}</span>
+                </button>
 
-                <div class="${diffLevel ? 'hidden' : ''}" id="wrap-single-height">
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Высота проёма</label>
-                  <input type="number" id="m-openHeight" value="${this.esc(m.openHeight)}" placeholder=""
-                    class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
-                </div>
-
-                <div class="${diffLevel ? '' : 'hidden'}" id="wrap-out-height">
-                  <label class="block text-xs font-semibold text-blue-700 mb-1">Высота СНАРУЖИ</label>
-                  <input type="number" id="m-openHeightOut" value="${this.esc(m.openHeightOut)}" placeholder=""
-                    class="m-input w-full border border-blue-300 bg-blue-50/40 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
-                </div>
-
-                <div class="${diffLevel ? '' : 'hidden'}" id="wrap-in-height">
-                  <label class="block text-xs font-semibold text-amber-700 mb-1">Высота ВНУТРИ</label>
-                  <input type="number" id="m-openHeightIn" value="${this.esc(m.openHeightIn)}" placeholder=""
-                    class="m-input w-full border border-amber-300 bg-amber-50/40 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-600 focus:outline-none">
-                </div>
-
-                <div>
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Толщина стены</label>
-                  <input type="number" id="m-wallDepth" value="${this.esc(m.wallDepth)}" placeholder=""
-                    class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                <div id="sec-body-oldDoor" class="${this.uiCollapsed.oldDoor ? 'hidden' : ''} px-5 pb-5 pt-2 border-t border-slate-100">
+                  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина (мм)</label>
+                      <input type="number" id="m-oldWidth" value="${this.esc(m.oldWidth)}" placeholder=""
+                        class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Высота (мм)</label>
+                      <input type="number" id="m-oldHeight" value="${this.esc(m.oldHeight)}" placeholder=""
+                        class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Толщ. коробки</label>
+                      <input type="number" id="m-oldFrameDepth" value="${this.esc(m.oldFrameDepth)}" placeholder=""
+                        class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Открывание</label>
+                      <select id="m-oldSide" class="m-input w-full border border-slate-300 rounded-lg px-2 py-2 text-sm bg-white">
+                        <option value="" ${!m.oldSide ? 'selected' : ''}></option>
+                        <option value="Наружное Левое" ${m.oldSide === 'Наружное Левое' ? 'selected' : ''}>Нар. Левое</option>
+                        <option value="Наружное Правое" ${m.oldSide === 'Наружное Правое' ? 'selected' : ''}>Нар. Правое</option>
+                        <option value="Внутреннее Левое" ${m.oldSide === 'Внутреннее Левое' ? 'selected' : ''}>Внутр. Левое</option>
+                        <option value="Внутреннее Правое" ${m.oldSide === 'Внутреннее Правое' ? 'selected' : ''}>Внутр. Правое</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <!-- БЛОК 2 и 3: СТАРАЯ ДВЕРЬ И ОТКОС -->
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
-              <div>
-                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-700 mb-3">2. Старая дверь (если есть, мм)</h3>
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div>
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина</label>
-                    <input type="number" id="m-oldWidth" value="${this.esc(m.oldWidth)}" placeholder=""
-                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+              <!-- 3. РАЗМЕР ПО ОТКОСУ (По умолчанию свёрнут) -->
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <button type="button" data-toggle-sec="slope"
+                  class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-slate-50 transition">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-bold uppercase tracking-wider text-slate-700">3. Размер по откосу</span>
+                    ${hasSlopeData ? `<span class="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full font-medium">Заполнено</span>` : `<span class="text-xs text-slate-400 font-normal">(нажмите, чтобы открыть)</span>`}
                   </div>
-                  <div>
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">Высота</label>
-                    <input type="number" id="m-oldHeight" value="${this.esc(m.oldHeight)}" placeholder=""
-                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                  <span class="text-slate-400 text-sm font-bold">${this.uiCollapsed.slope ? '▼' : '▲'}</span>
+                </button>
+
+                <div id="sec-body-slope" class="${this.uiCollapsed.slope ? 'hidden' : ''} px-5 pb-5 pt-2 border-t border-slate-100">
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина по откосу / наличнику (мм)</label>
+                      <input type="number" id="m-slopeWidth" value="${this.esc(m.slopeWidth)}" placeholder=""
+                        class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Высота по откосу / наличнику (мм)</label>
+                      <input type="number" id="m-slopeHeight" value="${this.esc(m.slopeHeight)}" placeholder=""
+                        class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    </div>
                   </div>
+                </div>
+              </div>
+
+              <!-- 4. РЕКОМЕНДУЕМЫЙ РАЗМЕР НОВОЙ ДВЕРИ + СХЕМАТИЧНОЕ ОТКРЫВАНИЕ (Всегда открыт) -->
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-5">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                   <div>
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">Толщ. коробки</label>
-                    <input type="number" id="m-oldFrameDepth" value="${this.esc(m.oldFrameDepth)}" placeholder=""
-                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    <h3 class="text-sm font-bold uppercase tracking-wider text-slate-800">4. Рекомендуемый размер новой двери</h3>
+                    <p class="text-[11px] text-slate-500">Стандарт: 860 / 950 × 2050 мм (шаг ±30 мм)</p>
                   </div>
+                  <button type="button" id="btn-auto-recommend"
+                    class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-semibold px-2.5 py-1 rounded-md transition">
+                    ⚡ Подобрать по проёму
+                  </button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3 mb-4">
                   <div>
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">Открывание</label>
-                    <select id="m-oldSide" class="m-input w-full border border-slate-300 rounded-lg px-2.5 py-2 text-sm bg-white">
-                      <option value="" ${!m.oldSide ? 'selected' : ''}></option>
-                      <option value="Наружное Левое" ${m.oldSide === 'Наружное Левое' ? 'selected' : ''}>Наруж. Левое</option>
-                      <option value="Наружное Правое" ${m.oldSide === 'Наружное Правое' ? 'selected' : ''}>Наруж. Правое</option>
-                      <option value="Внутреннее Левое" ${m.oldSide === 'Внутреннее Левое' ? 'selected' : ''}>Внутр. Левое</option>
-                      <option value="Внутреннее Правое" ${m.oldSide === 'Внутреннее Правое' ? 'selected' : ''}>Внутр. Правое</option>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина коробки (мм)</label>
+                    <select id="m-recWidth" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white font-semibold">
+                      <option value="" ${!m.recWidth ? 'selected' : ''}></option>
+                      ${WIDTH_OPTIONS.map(w => `
+                        <option value="${w}" ${String(m.recWidth) === String(w) ? 'selected' : ''}>${w} мм ${(w === 860 || w === 950) ? '(Стандарт)' : ''}</option>
+                      `).join('')}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-slate-600 mb-1">Высота коробки (мм)</label>
+                    <select id="m-recHeight" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white font-semibold">
+                      <option value="" ${!m.recHeight ? 'selected' : ''}></option>
+                      ${HEIGHT_OPTIONS.map(h => `
+                        <option value="${h}" ${String(m.recHeight) === String(h) ? 'selected' : ''}>${h} мм ${h === 2050 ? '(Стандарт)' : ''}</option>
+                      `).join('')}
                     </select>
                   </div>
                 </div>
-              </div>
 
-              <div class="border-t border-slate-100 pt-3">
-                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-700 mb-2">3. Размер по откосу (если есть, мм)</h3>
-                <div class="grid grid-cols-2 gap-3">
-                  <div>
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина по откосу</label>
-                    <input type="number" id="m-slopeWidth" value="${this.esc(m.slopeWidth)}" placeholder=""
-                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                  </div>
-                  <div>
-                    <label class="block text-xs font-semibold text-slate-600 mb-1">Высота по откосу</label>
-                    <input type="number" id="m-slopeHeight" value="${this.esc(m.slopeHeight)}" placeholder=""
-                      class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                  </div>
+                <!-- Схематичный выбор стороны открывания -->
+                <label class="block text-xs font-semibold text-slate-600 mb-2">Сторона открывания (схематично — вид сверху)</label>
+                <input type="hidden" id="m-recSide" value="${this.esc(m.recSide)}">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2" id="rec-side-cards">
+                  ${OPENING_SIDES.map(side => {
+                    const active = m.recSide === side.id;
+                    return `
+                      <button type="button" data-side-val="${side.id}"
+                        class="side-card-btn p-2 rounded-lg border text-center transition flex flex-col items-center justify-between ${active ? 'bg-blue-50 border-blue-600 ring-2 ring-blue-500/30 text-blue-900 font-bold' : 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700'}">
+                        <div class="w-full h-12 flex items-center justify-center">
+                          ${this.renderOpeningMiniSvg(side.hinge, side.dir, active)}
+                        </div>
+                        <span class="text-[11px] leading-tight mt-1">${side.short}</span>
+                      </button>
+                    `;
+                  }).join('')}
                 </div>
               </div>
-            </div>
 
-            <!-- БЛОК 4: РЕКОМЕНДУЕМЫЙ РАЗМЕР НОВОЙ ДВЕРИ (ШАГ 30 ММ) -->
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-              <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-                <div>
-                  <h3 class="text-sm font-bold uppercase tracking-wider text-slate-700">4. Рекомендуемый размер новой двери</h3>
-                  <p class="text-[11px] text-slate-500">Стандарт: 860 / 950 × 2050 мм (шаг изменения ±30 мм)</p>
-                </div>
-                <button type="button" id="btn-auto-recommend"
-                  class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-semibold px-2.5 py-1 rounded-md transition">
-                  ⚡ Подобрать по проёму
+              <!-- 5. ВЫЛЕТ НАЛИЧНИКА (По умолчанию свёрнут) -->
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <button type="button" data-toggle-sec="casing"
+                  class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-slate-50 transition">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-bold uppercase tracking-wider text-slate-700">5. Вылет наличника</span>
+                    ${hasCasingData ? `<span class="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full font-medium">${this.esc(m.casingProjection || '—')} мм</span>` : `<span class="text-xs text-slate-400 font-normal">(нажмите, чтобы открыть)</span>`}
+                  </div>
+                  <span class="text-slate-400 text-sm font-bold">${this.uiCollapsed.casing ? '▼' : '▲'}</span>
                 </button>
-              </div>
 
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Ширина коробки (мм)</label>
-                  <select id="m-recWidth" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white font-semibold">
-                    <option value="" ${!m.recWidth ? 'selected' : ''}></option>
-                    ${WIDTH_OPTIONS.map(w => {
-                      const isStd = (w === 860 || w === 950);
-                      return `<option value="${w}" ${String(m.recWidth) === String(w) ? 'selected' : ''}>${w} мм ${isStd ? '(Стандарт)' : ''}</option>`;
-                    }).join('')}
-                  </select>
-                </div>
+                <div id="sec-body-casing" class="${this.uiCollapsed.casing ? 'hidden' : ''} px-5 pb-5 pt-2 border-t border-slate-100">
+                  <p class="text-[11px] text-slate-500 mb-3">Уличные (без МДФ): 17–97 мм · Квартирные (с МДФ): 15–105 мм (67 мм — стандарт по умолчанию)</p>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Исполнение двери</label>
+                      <select id="m-doorCategory" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
+                        <option value="" ${!m.doorCategory ? 'selected' : ''}></option>
+                        <option value="outdoor" ${m.doorCategory === 'outdoor' ? 'selected' : ''}>Уличная без МДФ (17–97 мм)</option>
+                        <option value="apartment" ${m.doorCategory === 'apartment' ? 'selected' : ''}>Квартирная с МДФ (15–105 мм)</option>
+                      </select>
+                    </div>
 
-                <div>
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Высота коробки (мм)</label>
-                  <select id="m-recHeight" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white font-semibold">
-                    <option value="" ${!m.recHeight ? 'selected' : ''}></option>
-                    ${HEIGHT_OPTIONS.map(h => {
-                      const isStd = (h === 2050);
-                      return `<option value="${h}" ${String(m.recHeight) === String(h) ? 'selected' : ''}>${h} мм ${isStd ? '(Стандарт)' : ''}</option>`;
-                    }).join('')}
-                  </select>
-                </div>
-
-                <div>
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Сторона открывания</label>
-                  <select id="m-recSide" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white font-semibold">
-                    <option value="" ${!m.recSide ? 'selected' : ''}></option>
-                    <option value="Наружное Левое" ${m.recSide === 'Наружное Левое' ? 'selected' : ''}>Наружное Левое</option>
-                    <option value="Наружное Правое" ${m.recSide === 'Наружное Правое' ? 'selected' : ''}>Наружное Правое</option>
-                    <option value="Внутреннее Левое" ${m.recSide === 'Внутреннее Левое' ? 'selected' : ''}>Внутреннее Левое</option>
-                    <option value="Внутреннее Правое" ${m.recSide === 'Внутреннее Правое' ? 'selected' : ''}>Внутреннее Правое</option>
-                  </select>
-                </div>
-              </div>
-
-              <!-- Подсказка монтажных зазоров -->
-              <div id="gap-hint-box" class="mt-3 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                ${this.renderGapHint(m)}
-              </div>
-            </div>
-
-            <!-- БЛОК 5: ВЫЛЕТ НАЛИЧНИКА ЗА ГАБАРИТ КОРОБКИ -->
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-              <h3 class="text-sm font-bold uppercase tracking-wider text-slate-700 mb-1">5. Вылет наличника за габарит коробки</h3>
-              <p class="text-[11px] text-slate-500 mb-3">Уличные (без МДФ): 17–97 мм · Квартирные (с МДФ): 15–105 мм (67 мм — стандарт для всех)</p>
-
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Исполнение двери</label>
-                  <select id="m-doorCategory" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">
-                    <option value="" ${!m.doorCategory ? 'selected' : ''}></option>
-                    <option value="outdoor" ${m.doorCategory === 'outdoor' ? 'selected' : ''}>Уличная без МДФ (17–97 мм)</option>
-                    <option value="apartment" ${m.doorCategory === 'apartment' ? 'selected' : ''}>Квартирная с МДФ (15–105 мм)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label class="block text-xs font-semibold text-slate-600 mb-1">Вылет наличника (мм)</label>
-                  <select id="m-casingProjection" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white font-semibold">
-                    <option value="" ${!m.casingProjection ? 'selected' : ''}></option>
-                    ${this.getCasingOptionsHtml(m.doorCategory, m.casingProjection)}
-                  </select>
-                </div>
-              </div>
-
-              <div id="casing-hint-box" class="mt-3 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                ${this.renderCasingHint(m)}
-              </div>
-            </div>
-
-          </div>
-
-          <!-- ДОПОЛНИТЕЛЬНЫЕ ЗАМЕТКИ И КОММЕНТАРИИ -->
-          <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-            <label class="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">Примечания к замеру / Доп. работы на проёме</label>
-            <textarea id="m-notes" rows="2" placeholder=""
-              class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">${this.esc(m.notes)}</textarea>
-          </div>
-
-          <!-- БЛОК 6: ФОТО ПРОЁМА И ГАЛЕРЕЯ -->
-          <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-            <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-              <div>
-                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-700">6. Фотографии замера (${photos.length})</h3>
-                <p class="text-xs text-slate-500">Сделайте фото проёма камерой или выберите из галереи</p>
-              </div>
-              <div class="flex gap-2">
-                <label class="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-3.5 py-2 rounded-lg cursor-pointer transition flex items-center gap-1.5">
-                  📸 Сделать фото / Из галереи
-                  <input type="file" id="input-add-photos" accept="image/*" multiple class="hidden">
-                </label>
-              </div>
-            </div>
-
-            ${photos.length === 0 ? `
-              <div class="border-2 border-dashed border-slate-200 rounded-xl p-6 text-center text-xs text-slate-400">
-                Фотографии ещё не добавлены
-              </div>
-            ` : `
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                ${photos.map((ph, idx) => `
-                  <div class="relative group border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
-                    <img src="${ph.dataUrl}" class="w-full h-32 object-cover">
-                    <button type="button" data-del-photo="${idx}"
-                      class="absolute top-1.5 right-1.5 bg-rose-600 text-white text-xs w-6 h-6 rounded-full shadow flex items-center justify-center opacity-90 hover:opacity-100">
-                      ✕
-                    </button>
+                    <div>
+                      <label class="block text-xs font-semibold text-slate-600 mb-1">Вылет за габарит коробки (мм)</label>
+                      <select id="m-casingProjection" class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white font-semibold">
+                        <option value="" ${!m.casingProjection ? 'selected' : ''}></option>
+                        ${this.getCasingOptionsHtml(m.doorCategory, m.casingProjection)}
+                      </select>
+                    </div>
                   </div>
-                `).join('')}
+                </div>
               </div>
-            `}
+
+              <!-- Примечания -->
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-5">
+                <label class="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">Примечания к замеру / Доп. работы</label>
+                <textarea id="m-notes" rows="2" placeholder=""
+                  class="m-input w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">${this.esc(m.notes)}</textarea>
+              </div>
+
+            </div>
+
+            <!-- ПРАВАЯ КОЛОНКА: ОБЩАЯ ИЛЛЮСТРАЦИЯ И КРАТКОЕ ОПИСАНИЕ (5 колонок) -->
+            <div class="lg:col-span-5 space-y-4 lg:sticky lg:top-4">
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-5">
+                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-800 mb-2">6. Общая схема замера и описание</h3>
+                <div id="master-illustration-box">
+                  ${this.renderMasterIllustration(m)}
+                </div>
+              </div>
+
+   <!-- 7. ФОТОГРАФИИ ЗАМЕРА (2 ОТДЕЛЬНЫЕ КНОПКИ) -->
+              <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 md:p-5">
+                <div class="mb-3">
+                  <h3 class="text-sm font-bold uppercase tracking-wider text-slate-800">7. Фотографии объекта (${photos.length})</h3>
+                  <p class="text-[11px] text-slate-500">«Сделать фото» включает камеру и сохраняет копию снимка в галерею телефона</p>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2.5 mb-4">
+                  <!-- Кнопка 1: Сделать фото камерой + автосохранение в телефон -->
+                  <label class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2.5 px-3 rounded-lg cursor-pointer transition flex items-center justify-center gap-1.5 shadow-sm text-center">
+                    <span>📸</span> <span>Сделать фото</span>
+                    <input type="file" id="input-camera-shot" accept="image/*" capture="environment" class="hidden">
+                  </label>
+
+                  <!-- Кнопка 2: Добавить готовые фото из галереи -->
+                  <label class="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2.5 px-3 rounded-lg cursor-pointer transition flex items-center justify-center gap-1.5 shadow-sm text-center">
+                    <span>🖼️</span> <span>Добавить фото</span>
+                    <input type="file" id="input-gallery-add" accept="image/*" multiple class="hidden">
+                  </label>
+                </div>
+
+                ${photos.length === 0 ? `
+                  <div class="border-2 border-dashed border-slate-200 rounded-xl p-5 text-center text-xs text-slate-400">
+                    Нет прикреплённых фотографий
+                  </div>
+                ` : `
+                  <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    ${photos.map((ph, idx) => `
+                      <div class="relative group border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
+                        <img src="${ph.dataUrl}" class="w-full h-24 object-cover">
+                        <button type="button" data-del-photo="${idx}"
+                          class="absolute top-1 right-1 bg-rose-600 text-white text-xs w-6 h-6 rounded-full shadow flex items-center justify-center">
+                          ✕
+                        </button>
+                      </div>
+                    `).join('')}
+                  </div>
+                `}
+              </div>
+            </div>
+
           </div>
 
         </div>
       `;
 
       this.bindEvents(container);
+    },
+
+    // Мини-схема открывания (вид сверху: стена, петля, полотно и дуга открывания)
+    renderOpeningMiniSvg(hinge, dir, active) {
+      const stroke = active ? '#1d4ed8' : '#334155';
+      const arcColor = active ? '#3b82f6' : '#94a3b8';
+      // Координаты петель: left = x:18, right = x:62; стена по y:24
+      const hx = hinge === 'left' ? 18 : 62;
+      const closedX = hinge === 'left' ? 62 : 18;
+      const openY = dir === 'out' ? 44 : 4; // out = вниз (наружу к себе), in = вверх (внутрь от себя)
+      const sweep = (hinge === 'left' && dir === 'out') || (hinge === 'right' && dir === 'in') ? 1 : 0;
+
+      return `
+        <svg viewBox="0 0 80 48" class="w-16 h-11">
+          <!-- Стена и проём -->
+          <line x1="2" y1="24" x2="18" y2="24" stroke="#64748b" stroke-width="4" />
+          <line x1="62" y1="24" x2="78" y2="24" stroke="#64748b" stroke-width="4" />
+          <!-- Точка петли -->
+          <circle cx="${hx}" cy="24" r="3.5" fill="${stroke}" />
+          <!-- Полотно в открытом положении -->
+          <line x1="${hx}" y1="24" x2="${hx}" y2="${openY}" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" />
+          <!-- Дуга траектории -->
+          <path d="M ${closedX} 24 A 44 20 0 0 ${sweep} ${hx} ${openY}" fill="none" stroke="${arcColor}" stroke-width="1.5" stroke-dasharray="3,2" />
+          <!-- Подпись Снаружи/Внутри -->
+          <text x="40" y="${dir === 'out' ? 15 : 41}" text-anchor="middle" font-size="7" fill="#64748b">${dir === 'out' ? 'НАРУЖУ ↓' : 'ВНУТРЬ ↑'}</text>
+        </svg>
+      `;
+    },
+
+    // ОБЩАЯ ИЛЛЮСТРАЦИЯ ЗАМЕРА + КРАТКОЕ ОПИСАНИЕ
+    renderMasterIllustration(m) {
+      const openW = Number(m.openWidth) || 0;
+      const openH = m.diffLevel
+        ? Math.min(Number(m.openHeightOut) || 0, Number(m.openHeightIn) || 0)
+        : (Number(m.openHeight) || 0);
+      const heightLabel = m.diffLevel
+        ? (m.openHeightOut || m.openHeightIn ? `Снар: ${m.openHeightOut || '—'} / Внутр: ${m.openHeightIn || '—'}` : '—')
+        : (m.openHeight ? `${m.openHeight} мм` : '—');
+
+      const oldW = Number(m.oldWidth) || 0;
+      const oldH = Number(m.oldHeight) || 0;
+      const slopeW = Number(m.slopeWidth) || 0;
+      const slopeH = Number(m.slopeHeight) || 0;
+
+      const recW = Number(m.recWidth) || 0;
+      const recH = Number(m.recHeight) || 0;
+      const casing = Number(m.casingProjection) || 0;
+      const totalCasingW = (recW && casing) ? (recW + casing * 2) : 0;
+      const totalCasingH = (recH && casing) ? (recH + casing) : 0;
+
+      const sideObj = OPENING_SIDES.find(s => s.id === m.recSide) || null;
+      const hingeLeft = sideObj ? sideObj.hinge === 'left' : null;
+
+      // Расчёт зазоров
+      const gapW = (openW && recW) ? (openW - recW) : null;
+      const gapH = (openH && recH) ? (openH - recH) : null;
+
+      return `
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+          <svg viewBox="0 0 320 265" class="w-full h-auto mx-auto">
+            <!-- Легенда слоёв сверху -->
+            <g font-size="8.5" font-family="Arial, sans-serif">
+              <rect x="8" y="6" width="10" height="6" fill="none" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="3,2"/>
+              <text x="22" y="12" fill="#334155">Проём</text>
+
+              <rect x="65" y="6" width="10" height="6" fill="none" stroke="#9333ea" stroke-width="1.5" stroke-dasharray="2,2"/>
+              <text x="79" y="12" fill="#334155">Старая / Откос</text>
+
+              <rect x="155" y="6" width="10" height="6" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.8"/>
+              <text x="169" y="12" fill="#334155">Новая коробка</text>
+
+              <rect x="242" y="6" width="10" height="6" fill="none" stroke="#059669" stroke-width="1.8"/>
+              <text x="256" y="12" fill="#334155">Наличник</text>
+            </g>
+
+            <!-- 1. Контур старого откоса / старого наличника (фиолетовый пунктир, если указан) -->
+            ${(slopeW || slopeH || oldW || oldH) ? `
+              <rect x="52" y="26" width="146" height="196" fill="none" stroke="#9333ea" stroke-width="1.3" stroke-dasharray="2,2" />
+              <text x="125" y="24" text-anchor="middle" font-size="8" fill="#7e22ce">
+                ${slopeW || slopeH ? `Откос: ${slopeW || '—'}×${slopeH || '—'}` : `Старая: ${oldW || '—'}×${oldH || '—'}`}
+              </text>
+            ` : ''}
+
+            <!-- 2. Контур строительного проёма (красный штрих) -->
+            <rect x="62" y="36" width="126" height="184" fill="#fee2e2" fill-opacity="0.25" stroke="#dc2626" stroke-width="1.6" stroke-dasharray="5,3" />
+            <text x="125" y="47" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#b91c1c">
+              Проём: ${openW || '—'} × ${m.diffLevel ? (m.openHeightOut || '—') + '/' + (m.openHeightIn || '—') : (openH || '—')}
+            </text>
+
+            <!-- 3. Внешний габарит нового наличника (зелёный контур) -->
+            <rect x="57" y="31" width="136" height="189" fill="none" stroke="#059669" stroke-width="2" />
+            ${totalCasingW ? `
+              <text x="125" y="233" text-anchor="middle" font-size="9" font-weight="bold" fill="#047857">
+                По наличнику: ${totalCasingW} × ${totalCasingH} мм (вылет +${casing})
+              </text>
+            ` : ''}
+
+            <!-- 4. Новая дверная коробка (синий основной контур) -->
+            <rect x="70" y="49" width="110" height="171" fill="#eff6ff" stroke="#1d4ed8" stroke-width="2.5" />
+
+            <!-- Размеры новой коробки в центре полотна -->
+            <text x="125" y="122" text-anchor="middle" font-size="11" font-weight="bold" fill="#1e3a8a">
+              ${recW ? recW : 'Ш?'} × ${recH ? recH : 'В?'}
+            </text>
+            <text x="125" y="135" text-anchor="middle" font-size="8.5" fill="#475569">
+              ${m.recSide || 'Сторона не выбрана'}
+            </text>
+
+            <!-- Отрисовка петель и ручки на полотне, если выбрана сторона -->
+            ${hingeLeft !== null ? `
+              <!-- Петли -->
+              <rect x="${hingeLeft ? 68 : 178}" y="68" width="4" height="14" rx="1" fill="#0f172a" />
+              <rect x="${hingeLeft ? 68 : 178}" y="182" width="4" height="14" rx="1" fill="#0f172a" />
+              <!-- Ручка на противоположной стороне -->
+              <circle cx="${hingeLeft ? 168 : 82}" cy="134" r="3.5" fill="#1d4ed8" />
+              <line x1="${hingeLeft ? 168 : 82}" y1="134" x2="${hingeLeft ? 156 : 94}" y2="134" stroke="#1d4ed8" stroke-width="2.5" stroke-linecap="round" />
+            ` : ''}
+
+            <!-- Боковая мини-схема открывания (вид сверху) справа от двери -->
+            <g transform="translate(212, 75)">
+              <rect x="0" y="0" width="98" height="95" rx="6" fill="#ffffff" stroke="#cbd5e1" />
+              <text x="49" y="14" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#334155">План открывания</text>
+              ${sideObj ? `
+                <g transform="translate(9, 20)">
+                  ${this.renderOpeningMiniSvg(sideObj.hinge, sideObj.dir, true)}
+                </g>
+                <text x="49" y="84" text-anchor="middle" font-size="8" font-weight="bold" fill="#1d4ed8">${sideObj.short}</text>
+              ` : `
+                <text x="49" y="52" text-anchor="middle" font-size="8" fill="#94a3b8">Выберите сторону</text>
+              `}
+            </g>
+
+            <!-- Толщина стены -->
+            <text x="261" y="192" text-anchor="middle" font-size="8.5" fill="#475569">
+              Стена: ${m.wallDepth ? m.wallDepth + ' мм' : '—'}
+            </text>
+          </svg>
+
+          <!-- КРАТКОЕ ТЕКСТОВОЕ ОПИСАНИЕ ПОД ИЛЛЮСТРАЦИЕЙ -->
+          <div class="mt-2 pt-2.5 border-t border-slate-200 text-xs space-y-1 text-slate-700">
+            <div>• <strong>Проём:</strong> ${openW || '—'} × ${heightLabel}${m.wallDepth ? `, толщ. стены ${m.wallDepth} мм` : ''}</div>
+            ${(oldW || oldH || m.oldFrameDepth || m.oldSide) ? `
+              <div>• <strong>Старая дверь:</strong> ${oldW || '—'} × ${oldH || '—'} мм${m.oldFrameDepth ? ` (коробка ${m.oldFrameDepth} мм)` : ''}${m.oldSide ? `, ${m.oldSide}` : ''}</div>
+            ` : ''}
+            ${(slopeW || slopeH) ? `
+              <div>• <strong>Старый откос / наличник:</strong> ${slopeW || '—'} × ${slopeH || '—'} мм</div>
+            ` : ''}
+            <div>• <strong>Новая дверь (коробка):</strong> <span class="text-blue-700 font-bold">${recW || '—'} × ${recH || '—'} мм</span>, ${m.recSide || 'открывание не указано'}</div>
+            <div>• <strong>Габарит по наличнику:</strong> ${totalCasingW ? `<span class="text-emerald-700 font-bold">${totalCasingW} × ${totalCasingH} мм</span> (вылет ${casing} мм)` : (m.casingProjection ? `вылет ${m.casingProjection} мм` : 'не указан')}</div>
+            ${(gapW !== null || gapH !== null) ? `
+              <div class="text-[11px] text-slate-500 pt-0.5">
+                Монтажный зазор: ${gapW !== null ? `по ширине ${gapW > 0 ? '+' + gapW : gapW} мм (${Math.round(gapW/2)} мм/стор.)` : ''} ${gapH !== null ? `· по высоте ${gapH > 0 ? '+' + gapH : gapH} мм` : ''}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
     },
 
     getCasingOptionsHtml(category, selectedVal) {
@@ -841,52 +1056,17 @@
       } else if (category === 'apartment') {
         list = CASING_APARTMENT;
       } else {
-        // Если тип ещё не выбран — показываем объединённый список с пометкой стандарта 67 мм
         list = Array.from(new Set([...CASING_APARTMENT, ...CASING_OUTDOOR])).sort((a, b) => a - b);
       }
-      return list.map(v => {
-        const isDefault = (v === 67);
-        return `<option value="${v}" ${String(selectedVal) === String(v) ? 'selected' : ''}>${v} мм ${isDefault ? '(Стандарт по умолчанию)' : ''}</option>`;
-      }).join('');
-    },
-
-    renderGapHint(m) {
-      const recW = Number(m.recWidth);
-      const recH = Number(m.recHeight);
-      const openW = Number(m.openWidth);
-      const openH = m.diffLevel
-        ? Math.min(Number(m.openHeightOut) || 0, Number(m.openHeightIn) || 0)
-        : Number(m.openHeight);
-
-      if (!recW && !recH) return 'Выберите рекомендуемый размер коробки для расчёта монтажных зазоров.';
-      const parts = [];
-      if (recW && openW) {
-        const gapW = openW - recW;
-        parts.push(`Зазор по ширине: <strong>${gapW > 0 ? '+' + gapW : gapW} мм</strong> (${(gapW / 2).toFixed(0)} мм на сторону)`);
-      }
-      if (recH && openH) {
-        const gapH = openH - recH;
-        parts.push(`Зазор по высоте: <strong>${gapH > 0 ? '+' + gapH : gapH} мм</strong>`);
-      }
-      return parts.length ? parts.join(' · ') : 'Введите размеры проёма для отображения зазоров.';
-    },
-
-    renderCasingHint(m) {
-      const w = Number(m.recWidth);
-      const h = Number(m.recHeight);
-      const c = Number(m.casingProjection);
-      if (!w || !h || !c) return 'При выборе размера коробки и вылета наличника здесь появится внешний габарит по наличнику.';
-      const totalW = w + c * 2;
-      const totalH = h + c;
-      return `Габарит двери с наличником: <strong>${totalW} × ${totalH} мм</strong> (вылет +${c} мм на сторону)`;
+      return list.map(v => `
+        <option value="${v}" ${String(selectedVal) === String(v) ? 'selected' : ''}>${v} мм ${v === 67 ? '(Стандарт по умолчанию)' : ''}</option>
+      `).join('');
     },
 
     bindEvents(container) {
       const saveAll = () => {
         const prev = AppCore.getState('ext_measure') || {};
         const diffLevel = container.querySelector('#m-diffLevel').checked;
-        const doorCategory = container.querySelector('#m-doorCategory').value;
-        const casingProjection = container.querySelector('#m-casingProjection').value;
 
         const updated = {
           ...prev,
@@ -905,19 +1085,16 @@
           recWidth: container.querySelector('#m-recWidth').value,
           recHeight: container.querySelector('#m-recHeight').value,
           recSide: container.querySelector('#m-recSide').value,
-          doorCategory,
-          casingProjection,
+          doorCategory: container.querySelector('#m-doorCategory').value,
+          casingProjection: container.querySelector('#m-casingProjection').value,
           notes: container.querySelector('#m-notes').value
         };
 
         AppCore.updateState('ext_measure', updated);
 
-        // Обновляем живые подсказки без полной перерисовки DOM
-        const gapBox = container.querySelector('#gap-hint-box');
-        if (gapBox) gapBox.innerHTML = this.renderGapHint(updated);
-
-        const casingBox = container.querySelector('#casing-hint-box');
-        if (casingBox) casingBox.innerHTML = this.renderCasingHint(updated);
+        // Живое обновление общей иллюстрации и описания без потери фокуса ввода
+        const illBox = container.querySelector('#master-illustration-box');
+        if (illBox) illBox.innerHTML = this.renderMasterIllustration(updated);
 
         const badge = container.querySelector('#ext-m-save-badge');
         if (badge) {
@@ -927,20 +1104,39 @@
         }
       };
 
-      // Переключение чекбокса разных уровней пола
-      const diffCheck = container.querySelector('#m-diffLevel');
-      diffCheck.addEventListener('change', () => {
+      // Сворачивание / разворачивание блоков 2, 3 и 5
+      container.querySelectorAll('[data-toggle-sec]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const sec = btn.dataset.toggleSec;
+          this.uiCollapsed[sec] = !this.uiCollapsed[sec];
+          this.render(container, AppCore.getState());
+        });
+      });
+
+      // Схематичные кнопки выбора стороны открывания
+      container.querySelectorAll('.side-card-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const val = btn.dataset.sideVal;
+          const hiddenInput = container.querySelector('#m-recSide');
+          // Повторный клик снимает выбор, если нужно оставить пустым
+          hiddenInput.value = (hiddenInput.value === val) ? '' : val;
+          saveAll();
+          this.render(container, AppCore.getState());
+        });
+      });
+
+      // Чекбокс разных уровней высоты проёма
+      container.querySelector('#m-diffLevel').addEventListener('change', () => {
         saveAll();
         this.render(container, AppCore.getState());
       });
 
-      // При смене категории двери (Уличная / Квартирная) обновляем список вылетов наличника
+      // Переключение категории двери для вылета наличника
       const catSelect = container.querySelector('#m-doorCategory');
       catSelect.addEventListener('change', () => {
         const currentProj = container.querySelector('#m-casingProjection').value;
         const newCat = catSelect.value;
         const projSelect = container.querySelector('#m-casingProjection');
-        // Если поле вылета было пустым, не заполняем насильно, но если выбранное значение не входит в новый ряд — ставим 67
         const validSet = newCat === 'outdoor' ? CASING_OUTDOOR : (newCat === 'apartment' ? CASING_APARTMENT : []);
         let nextVal = currentProj;
         if (currentProj && validSet.length && !validSet.includes(Number(currentProj))) {
@@ -950,13 +1146,13 @@
         saveAll();
       });
 
-      // Слушатели на все поля ввода
+      // Автосохранение всех инпутов
       container.querySelectorAll('.m-input').forEach(el => {
         el.addEventListener('input', saveAll);
         el.addEventListener('change', saveAll);
       });
 
-      // Кнопка автоподбора размера новой двери по проёму (шаг 30 мм)
+      // Автоподбор размера новой двери по проёму
       container.querySelector('#btn-auto-recommend').addEventListener('click', () => {
         const m = AppCore.getState('ext_measure') || {};
         const openW = Number(m.openWidth);
@@ -965,43 +1161,51 @@
           : Number(m.openHeight);
 
         if (!openW && (!openH || openH === 9999)) {
-          alert('Сначала введите ширину или высоту проёма в пункте 1.');
+          alert('Сначала введите ширину или высоту проёма в разделе 1.');
           return;
         }
 
-        // Подбираем максимальный размер из сетки 30 мм, который меньше проёма минимум на 20 мм
-        let bestW = m.recWidth || '';
         if (openW) {
-          const candidatesW = WIDTH_OPTIONS.filter(w => w <= openW - 20);
-          bestW = candidatesW.length ? String(candidatesW[candidatesW.length - 1]) : String(WIDTH_OPTIONS[0]);
+          const cW = WIDTH_OPTIONS.filter(w => w <= openW - 20);
+          container.querySelector('#m-recWidth').value = cW.length ? String(cW[cW.length - 1]) : String(WIDTH_OPTIONS[0]);
         }
-
-        let bestH = m.recHeight || '';
         if (openH && openH !== 9999) {
-          const candidatesH = HEIGHT_OPTIONS.filter(h => h <= openH - 15);
-          bestH = candidatesH.length ? String(candidatesH[candidatesH.length - 1]) : String(HEIGHT_OPTIONS[0]);
+          const cH = HEIGHT_OPTIONS.filter(h => h <= openH - 15);
+          container.querySelector('#m-recHeight').value = cH.length ? String(cH[cH.length - 1]) : String(HEIGHT_OPTIONS[0]);
         }
-
-        container.querySelector('#m-recWidth').value = bestW;
-        container.querySelector('#m-recHeight').value = bestH;
         if (!container.querySelector('#m-recSide').value && m.oldSide) {
           container.querySelector('#m-recSide').value = m.oldSide;
         }
-        if (!container.querySelector('#m-casingProjection').value) {
-          container.querySelector('#m-casingProjection').value = '67';
-        }
         saveAll();
+        this.render(container, AppCore.getState());
       });
 
-      // Добавление фото объекта (сжатие в Canvas, чтобы не переполнить localStorage)
-      container.querySelector('#input-add-photos').addEventListener('change', async (e) => {
+      // КНОПКА 1: «Сделать фото» (Камера + сохранение в замер + скачивание копии в галерею телефона)
+      container.querySelector('#input-camera-shot').addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        // 1. Сохраняем оригинал фото в память/галерею телефона, чтобы снимок с камеры не пропал
+        this.saveFileToPhoneGallery(file);
+
+        // 2. Сжимаем и добавляем в замер
+        const compressed = await this.compressImage(file, 1100, 0.8);
+        const m = AppCore.getState('ext_measure') || {};
+        const photos = Array.isArray(m.photos) ? [...m.photos] : [];
+        photos.push({ id: Date.now() + Math.random(), dataUrl: compressed });
+        AppCore.updateState('ext_measure', { photos });
+        this.render(container, AppCore.getState());
+      });
+
+      // КНОПКА 2: «Добавить фото» (Выбор из галереи без автоскачивания)
+      container.querySelector('#input-gallery-add').addEventListener('change', async (e) => {
         const files = Array.from(e.target.files || []);
         if (!files.length) return;
         const m = AppCore.getState('ext_measure') || {};
         const photos = Array.isArray(m.photos) ? [...m.photos] : [];
 
         for (const file of files) {
-          const compressed = await this.compressImage(file, 1100, 0.78);
+          const compressed = await this.compressImage(file, 1100, 0.8);
           photos.push({ id: Date.now() + Math.random(), dataUrl: compressed });
         }
         AppCore.updateState('ext_measure', { photos });
@@ -1019,242 +1223,130 @@
         });
       });
 
-      // Печать 1: Пустой бланк А4 пополам (2 бланка А5 на одном листе А4)
+      // ПЕЧАТЬ 1: Полностью пустой бланк А4 пополам (даже ФИО и адрес заполняются от руки)
       container.querySelector('#btn-print-blank-a5').addEventListener('click', () => {
-        this.printBlankHalfA4(AppCore.getState('client'));
+        this.printBlankHalfA4();
       });
 
-      // Печать 2: Заполненный замерочный лист А4
+      // ПЕЧАТЬ 2: Заполненный замерочный лист со схемой
       container.querySelector('#btn-print-filled').addEventListener('click', () => {
         this.printFilledSheet(AppCore.getState());
       });
 
-      // Настройка API ключа для ИИ-распознавания рукописного бланка
+      // Ключ ИИ для чтения рукописного бланка
       container.querySelector('#btn-ocr-settings').addEventListener('click', () => {
         const currentKey = localStorage.getItem('DOOR_ECO_GEMINI_KEY') || '';
-        const newKey = prompt(
-          'Для точного распознавания РУКОПИСНОГО почерка по фото бланка вставьте бесплатный API-ключ Google Gemini (AI Studio).\nЕсли оставить пустым — будет использоваться базовый встроенный сканер цифр:',
-          currentKey
-        );
-        if (newKey !== null) {
-          localStorage.setItem('DOOR_ECO_GEMINI_KEY', newKey.trim());
-        }
+        const newKey = prompt('Вставьте API-ключ Google Gemini для автоматического чтения рукописного бланка по фото:', currentKey);
+        if (newKey !== null) localStorage.setItem('DOOR_ECO_GEMINI_KEY', newKey.trim());
       });
 
-      // Распознавание сфотографированного бланка
+      // Загрузка фото заполненного от руки бланка
       container.querySelector('#input-ocr-sheet').addEventListener('change', async (e) => {
-        const file = e.target.files[0];
+        const file = e.target.files?.[0];
         if (!file) return;
         await this.processHandwrittenSheetPhoto(file, container);
         e.target.value = '';
       });
     },
 
-    // Обработка фото рукописного бланка (сохраняет фото в замер + вытаскивает размеры в поля)
-    async processHandwrittenSheetPhoto(file, container) {
-      const statusBox = container.querySelector('#ocr-status-box');
-      const statusText = container.querySelector('#ocr-status-text');
-      statusBox.classList.remove('hidden');
-      statusText.textContent = '⏳ Сжатие и анализ сфотографированного бланка...';
-
+    // Сохранение сделанного камерой снимка в галерею/загрузки телефона
+    saveFileToPhoneGallery(file) {
       try {
-        const dataUrl = await this.compressImage(file, 1400, 0.85);
-        
-        // Сразу прикрепляем фото бланка в галерею замера
-        const m = AppCore.getState('ext_measure') || {};
-        const photos = Array.isArray(m.photos) ? [...m.photos] : [];
-        photos.unshift({ id: Date.now(), dataUrl });
-        AppCore.updateState('ext_measure', { photos });
-
-        const apiKey = localStorage.getItem('DOOR_ECO_GEMINI_KEY');
-        let parsedData = null;
-
-        if (apiKey) {
-          statusText.textContent = '🤖 ИИ считывает рукописные размеры с бланка...';
-          parsedData = await this.parseWithGeminiVision(dataUrl, apiKey);
-        } else {
-          statusText.textContent = '🔍 Сканирование меток бланка (для рукописного почерка рекомендуется указать Ключ ИИ ⚙️)...';
-          parsedData = await this.parseWithFallbackOCR(dataUrl);
-        }
-
-        if (parsedData && Object.keys(parsedData).length > 0) {
-          const cleanData = {};
-          Object.entries(parsedData).forEach(([k, v]) => {
-            if (v !== null && v !== undefined && String(v).trim() !== '') {
-              cleanData[k] = String(v).trim();
-            }
-          });
-          if (cleanData.openHeightOut || cleanData.openHeightIn) {
-            cleanData.diffLevel = true;
-          }
-          AppCore.updateState('ext_measure', cleanData);
-          this.render(container, AppCore.getState());
-          alert('Данные с фото бланка успешно перенесены в поля замера!');
-        } else {
-          this.render(container, AppCore.getState());
-          alert('Фото бланка прикреплено к замеру, но автоматически прочитать почерк не удалось. Нажмите ⚙️ «Ключ ИИ» для подключения распознавания рукописного текста.');
-        }
+        const clientName = (AppCore.getState('client')?.fullName || 'Zamer').replace(/\s+/g, '_');
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const url = URL.createObjectURL(file);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Foto_${clientName}_${stamp}.jpg`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
       } catch (err) {
-        console.error(err);
-        statusBox.classList.add('hidden');
-        alert('Ошибка при анализе изображения: ' + err.message);
+        console.warn('Не удалось автоматически сохранить копию в галерею:', err);
       }
     },
 
-    async parseWithGeminiVision(dataUrl, apiKey) {
-      const base64Data = dataUrl.split(',')[1];
-      const prompt = `Проанализируй фото рукописного замерочного бланка входной двери и верни ТОЛЬКО чистый JSON без markdown-обертки со следующими полями (если поле пустое на бланке — верни ""):
-      {
-        "openWidth": "число мм (ширина проёма [Ш_ПРОЕМА])",
-        "openHeight": "число мм (высота проёма [В_ПРОЕМА])",
-        "openHeightOut": "число мм (высота снаружи [В_СНАРУЖИ])",
-        "openHeightIn": "число мм (высота внутри [В_ВНУТРИ])",
-        "wallDepth": "число мм (толщина стены [Г_СТЕНЫ])",
-        "oldWidth": "число мм (старая дверь ширина [СТ_Ш])",
-        "oldHeight": "число мм (старая дверь высота [СТ_В])",
-        "oldFrameDepth": "число мм (старая коробка [СТ_КОР])",
-        "oldSide": "одно из: Наружное Левое | Наружное Правое | Внутреннее Левое | Внутреннее Правое",
-        "slopeWidth": "число мм (ширина по откосу [ОТК_Ш])",
-        "slopeHeight": "число мм (высота по откосу [ОТК_В])",
-        "recWidth": "число мм (рекомендуемая ширина новой двери [НОВ_Ш], например 860, 950)",
-        "recHeight": "число мм (рекомендуемая высота новой двери [НОВ_В], например 2050)",
-        "recSide": "одно из: Наружное Левое | Наружное Правое | Внутреннее Левое | Внутреннее Правое",
-        "doorCategory": "outdoor (если уличная без МДФ) или apartment (если квартирная с МДФ)",
-        "casingProjection": "число мм (вылет наличника [НАЛИЧНИК], например 67)",
-        "notes": "текст примечаний"
-      }`;
-
-      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: 'image/jpeg', data: base64Data } }
-            ]
-          }]
-        })
-      });
-
-      if (!resp.ok) throw new Error('Проверьте правильность API-ключа Gemini');
-      const json = await resp.json();
-      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-      const cleanedJson = rawText.replace(/```json|```/g, '').trim();
-      return JSON.parse(cleanedJson);
-    },
-
-    async parseWithFallbackOCR(dataUrl) {
-      if (!window.Tesseract) {
-        await new Promise((res, rej) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-          s.onload = res;
-          s.onerror = rej;
-          document.head.appendChild(s);
-        });
-      }
-      const { data: { text } } = await window.Tesseract.recognize(dataUrl, 'rus+eng');
-      const result = {};
-      const matchNum = (regex) => {
-        const m = text.match(regex);
-        return m ? m[1] : '';
-      };
-      result.openWidth = matchNum(/Ш_ПРОЕМА[^\d]*(\d{3,4})/i);
-      result.openHeight = matchNum(/В_ПРОЕМА[^\d]*(\d{3,4})/i);
-      result.openHeightOut = matchNum(/В_СНАРУЖИ[^\d]*(\d{3,4})/i);
-      result.openHeightIn = matchNum(/В_ВНУТРИ[^\d]*(\d{3,4})/i);
-      result.wallDepth = matchNum(/Г_СТЕНЫ[^\d]*(\d{2,4})/i);
-      result.oldWidth = matchNum(/СТ_Ш[^\d]*(\d{3,4})/i);
-      result.oldHeight = matchNum(/СТ_В[^\d]*(\d{3,4})/i);
-      result.slopeWidth = matchNum(/ОТК_Ш[^\d]*(\d{3,4})/i);
-      result.slopeHeight = matchNum(/ОТК_В[^\d]*(\d{3,4})/i);
-      result.recWidth = matchNum(/НОВ_Ш[^\d]*(\d{3,4})/i);
-      result.recHeight = matchNum(/НОВ_В[^\d]*(\d{3,4})/i);
-      result.casingProjection = matchNum(/НАЛИЧНИК[^\d]*(\d{2,3})/i);
-      return result;
-    },
-
-    // ПЕЧАТЬ 1: ПУСТОЙ БЛАНК А4 ПОПОЛАМ (2 одинаковых бланка А5 на одном листе А4)
-    printBlankHalfA4(client) {
-      const renderSingleHalf = (titleSuffix) => `
+    // ПЕЧАТЬ 1: АБСОЛЮТНО ПУСТОЙ БЛАНК А4 ПОПОЛАМ (включая пустые строки под ФИО и адрес)
+    printBlankHalfA4() {
+      const renderBlankHalf = () => `
         <div style="height: 133mm; box-sizing: border-box; padding: 3mm 4mm; font-family: Arial, sans-serif; font-size: 11px; color: #000; display: flex; flex-direction: column; justify-content: space-between;">
           <div>
             <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid #000; padding-bottom: 3px; margin-bottom: 6px;">
-              <strong style="font-size: 13px;">ЗАМЕРОЧНЫЙ БЛАНК ВХОДНОЙ ДВЕРИ ${titleSuffix}</strong>
-              <span style="font-size: 10px;">Дата: «____» ____________ 202__ г.</span>
+              <strong style="font-size: 13px;">ЗАМЕРОЧНЫЙ ЛИСТ ВХОДНОЙ ДВЕРИ</strong>
+              <span style="font-size: 10.5px;">Дата: «____» ____________ 202__ г.</span>
             </div>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 6px; font-size: 10.5px;">
-              <div><strong>Клиент:</strong> ${this.esc(client?.fullName || '____________________________')}</div>
-              <div><strong>Тел.:</strong> ${this.esc(client?.phone || '_____________________')}</div>
-              <div><strong>Адрес:</strong> ${this.esc(client?.address || '____________________________')}</div>
-              <div><strong>Этаж / Лифт:</strong> ${this.esc(client?.floor || '____')} / ${client?.elevatorType === 'cargo' ? 'Грузовой' : client?.elevatorType === 'passenger' ? 'Пассаж.' : '_______'}</div>
+            <!-- Пустые графы клиента для заполнения от руки -->
+            <div style="display: grid; grid-template-columns: 1.3fr 1fr; gap: 5px; margin-bottom: 6px; font-size: 10.5px;">
+              <div><strong>ФИО клиента:</strong> _____________________________________</div>
+              <div><strong>Тел.:</strong> ___________________________</div>
+              <div><strong>Адрес:</strong> ___________________________________________</div>
+              <div><strong>Этаж:</strong> ______ <strong>Лифт:</strong> [ ] Нет &nbsp;[ ] Пасс &nbsp;[ ] Груз</div>
             </div>
 
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 10.5px;">
               <tr>
-                <td style="border: 1px solid #000; padding: 4px; width: 33%;">
-                  <strong>1. ПРОЁМ (мм)</strong><br>
+                <td style="border: 1px solid #000; padding: 4px; width: 34%; vertical-align: top;">
+                  <strong>1. РАЗМЕР ПРОЁМА (мм)</strong><br>
                   Ширина [Ш_ПРОЕМА]: __________<br>
-                  Высота [В_ПРОЕМА]: __________<br>
-                  Высота СНАР [В_СНАРУЖИ]: ______<br>
-                  Высота ВНУТР [В_ВНУТРИ]: ______<br>
+                  Высота общая [В_ПРОЕМА]: _____<br>
+                  Высота СНАР [В_СНАРУЖИ]: _____<br>
+                  Высота ВНУТР [В_ВНУТРИ]: _____<br>
                   Толщ. стены [Г_СТЕНЫ]: ________
                 </td>
-                <td style="border: 1px solid #000; padding: 4px; width: 33%;">
+                <td style="border: 1px solid #000; padding: 4px; width: 33%; vertical-align: top;">
                   <strong>2. СТАРАЯ ДВЕРЬ (мм)</strong><br>
                   Ширина [СТ_Ш]: ____________<br>
                   Высота [СТ_В]: ____________<br>
                   Толщ. кор. [СТ_КОР]: _________<br>
-                  Откр.: [ ] Нар.Л [ ] Нар.П<br>
-                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[ ] Вн.Л &nbsp;[ ] Вн.П
+                  Откр.: [ ] Нар.Л &nbsp;[ ] Нар.П<br>
+                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[ ] Вн.Л &nbsp;&nbsp;[ ] Вн.П
                 </td>
-                <td style="border: 1px solid #000; padding: 4px; width: 34%;">
-                  <strong>3. ОТКОС (если есть, мм)</strong><br>
+                <td style="border: 1px solid #000; padding: 4px; width: 33%; vertical-align: top;">
+                  <strong>3. РАЗМЕР ПО ОТКОСУ (мм)</strong><br>
                   Ширина [ОТК_Ш]: ____________<br>
                   Высота [ОТК_В]: ____________<br><br>
                   <strong>5. ВЫЛЕТ НАЛИЧНИКА</strong><br>
-                  [ ] Уличная (17-97) &nbsp;[ ] Кварт. МДФ (15-105)<br>
-                  Вылет [НАЛИЧНИК]: _______ мм (ст. 67)
+                  [ ] Улич. (17-97) [ ] Кварт. (15-105)<br>
+                  Вылет [НАЛИЧНИК]: _____ мм (ст.67)
                 </td>
               </tr>
             </table>
 
             <div style="border: 1.5px solid #000; padding: 5px; margin-bottom: 6px; font-size: 11px;">
-              <strong>4. РЕКОМЕНДУЕМЫЙ РАЗМЕР НОВОЙ ДВЕРИ (ст. 860 / 950 × 2050, шаг ±30 мм):</strong><br>
+              <strong>4. РЕКОМЕНДУЕМЫЙ РАЗМЕР НОВОЙ ДВЕРИ (860 / 950 × 2050, шаг ±30 мм):</strong>
               <div style="margin-top: 4px; display: flex; justify-content: space-between;">
-                <span>Ширина [НОВ_Ш]: ____________ мм</span>
-                <span>Высота [НОВ_В]: ____________ мм</span>
-                <span>Открывание: [ ] Нар.Л &nbsp;[ ] Нар.П &nbsp;[ ] Вн.Л &nbsp;[ ] Вн.П</span>
+                <span>Ширина [НОВ_Ш]: ___________ мм</span>
+                <span>Высота [НОВ_В]: ___________ мм</span>
+                <span>Откр.: [ ] Нар.Л &nbsp;[ ] Нар.П &nbsp;[ ] Вн.Л &nbsp;[ ] Вн.П</span>
               </div>
             </div>
 
-            <div style="border: 1px solid #000; padding: 4px; height: 22mm; font-size: 10px;">
-              <strong>Примечания / Доп. работы на проёме:</strong>
+            <div style="border: 1px solid #000; padding: 4px; height: 20mm; font-size: 10px;">
+              <strong>Примечания / Доп. работы:</strong>
             </div>
           </div>
 
-          <div style="font-size: 9px; color: #444; display: flex; justify-content: space-between;">
-            <span>Подпись замерщика: ___________________</span>
-            <span>Подпись клиента: ___________________</span>
+          <div style="font-size: 9.5px; display: flex; justify-content: space-between;">
+            <span>Замерщик: _______________________</span>
+            <span>Заказчик: _______________________</span>
           </div>
         </div>
       `;
 
-      const html = `
+      AppCore.printHtml(`
         <div style="width: 100%; box-sizing: border-box;">
-          ${renderSingleHalf('')}
+          ${renderBlankHalf()}
           <div style="border-top: 1px dashed #666; margin: 3mm 0; text-align: center; font-size: 9px; color: #666;">
-            ✂ Линия разреза (Формат А4 пополам — А5)
+            ✂ Линия разреза (Формат А4 пополам)
           </div>
-          ${renderSingleHalf('')}
+          ${renderBlankHalf()}
         </div>
-      `;
-      AppCore.printHtml(html);
+      `);
     },
 
-    // ПЕЧАТЬ 2: ЗАПОЛНЕННЫЙ ЗАМЕРОЧНЫЙ ЛИСТ А4
+    // ПЕЧАТЬ 2: ЗАПОЛНЕННЫЙ ЗАМЕРОЧНЫЙ ЛИСТ С ИЛЛЮСТРАЦИЕЙ
     printFilledSheet(fullState) {
       const c = fullState.client || {};
       const m = fullState.ext_measure || {};
@@ -1264,108 +1356,190 @@
         ? `Снаружи: ${this.esc(m.openHeightOut || '—')} мм / Внутри: ${this.esc(m.openHeightIn || '—')} мм`
         : `${this.esc(m.openHeight || '—')} мм`;
 
-      const catText = m.doorCategory === 'outdoor'
-        ? 'Уличная без накладок МДФ (17–97 мм)'
-        : m.doorCategory === 'apartment'
-          ? 'Квартирная с накладками МДФ (15–105 мм)'
-          : '—';
-
       const html = `
-        <div style="font-family: Arial, sans-serif; color: #000; font-size: 12px; line-height: 1.4;">
-          <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 14px;">
+        <div style="font-family: Arial, sans-serif; color: #000; font-size: 12px; line-height: 1.35;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 10px;">
             <div>
-              <h1 style="font-size: 18px; font-weight: bold; margin: 0;">ЗАМЕРОЧНЫЙ ЛИСТ (ВХОДНЫЕ ДВЕРИ)</h1>
-              <div style="font-size: 11px; color: #333;">Фирменный салон дверей «Стальная линия»</div>
+              <h1 style="font-size: 17px; font-weight: bold; margin: 0;">ЗАМЕРОЧНЫЙ ЛИСТ ВХОДНОЙ ДВЕРИ</h1>
+              <div style="font-size: 10.5px; color: #333;">Фирменный салон дверей «Стальная линия»</div>
             </div>
-            <div style="font-size: 11px;">Дата печати: ${new Date().toLocaleDateString('ru-RU')}</div>
+            <div style="font-size: 11px;">Дата: ${new Date().toLocaleDateString('ru-RU')}</div>
           </div>
 
-          <!-- Данные клиента -->
-          <table style="width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 12px;">
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 11.5px;">
             <tr>
-              <td style="border: 1px solid #000; padding: 6px; width: 50%;"><strong>Клиент:</strong> ${this.esc(c.fullName || '—')}</td>
-              <td style="border: 1px solid #000; padding: 6px; width: 50%;"><strong>Телефон:</strong> ${this.esc(c.phone || '—')}</td>
+              <td style="border: 1px solid #000; padding: 5px; width: 55%;"><strong>Клиент:</strong> ${this.esc(c.fullName || '—')}</td>
+              <td style="border: 1px solid #000; padding: 5px; width: 45%;"><strong>Телефон:</strong> ${this.esc(c.phone || '—')}</td>
             </tr>
             <tr>
-              <td style="border: 1px solid #000; padding: 6px;"><strong>Адрес установки:</strong> ${this.esc(c.address || '—')}</td>
-              <td style="border: 1px solid #000; padding: 6px;"><strong>Этаж / Лифт:</strong> ${this.esc(c.floor || '—')} (${c.elevatorType === 'cargo' ? 'Грузовой лифт' : c.elevatorType === 'passenger' ? 'Пассажирский лифт' : 'Без лифта'})</td>
+              <td style="border: 1px solid #000; padding: 5px;"><strong>Адрес:</strong> ${this.esc(c.address || '—')}</td>
+              <td style="border: 1px solid #000; padding: 5px;"><strong>Этаж / Лифт:</strong> ${this.esc(c.floor || '—')} (${c.elevatorType === 'cargo' ? 'Грузовой' : c.elevatorType === 'passenger' ? 'Пассажирский' : 'Без лифта'})</td>
             </tr>
           </table>
 
-          <!-- Таблица параметров замера -->
-          <table style="width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 12px;">
-            <thead>
-              <tr style="background: #f0f0f0;">
-                <th style="border: 1px solid #000; padding: 6px; text-align: left;">Раздел замера</th>
-                <th style="border: 1px solid #000; padding: 6px; text-align: left;">Параметры и размеры</th>
-              </tr>
-            </thead>
-            <tbody>
+          <div style="display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 10px; align-items: start; margin-bottom: 10px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 11.5px;">
               <tr>
-                <td style="border: 1px solid #000; padding: 7px; font-weight: bold; width: 35%;">1. Размер проёма</td>
-                <td style="border: 1px solid #000; padding: 7px;">
-                  Ширина: <strong>${this.esc(m.openWidth || '—')} мм</strong> &nbsp;|&nbsp;
-                  Высота: <strong>${heightText}</strong> &nbsp;|&nbsp;
+                <td style="border: 1px solid #000; padding: 6px; font-weight: bold; width: 38%;">1. Проём</td>
+                <td style="border: 1px solid #000; padding: 6px;">
+                  Ш: <strong>${this.esc(m.openWidth || '—')} мм</strong> | В: <strong>${heightText}</strong><br>
                   Толщина стены: <strong>${this.esc(m.wallDepth || '—')} мм</strong>
                 </td>
               </tr>
               <tr>
-                <td style="border: 1px solid #000; padding: 7px; font-weight: bold;">2. Старая дверь</td>
-                <td style="border: 1px solid #000; padding: 7px;">
-                  Ширина: <strong>${this.esc(m.oldWidth || '—')} мм</strong> &nbsp;|&nbsp;
-                  Высота: <strong>${this.esc(m.oldHeight || '—')} мм</strong> &nbsp;|&nbsp;
-                  Толщина коробки: <strong>${this.esc(m.oldFrameDepth || '—')} мм</strong><br>
-                  Сторона открывания: <strong>${this.esc(m.oldSide || '—')}</strong>
+                <td style="border: 1px solid #000; padding: 6px; font-weight: bold;">2. Старая дверь</td>
+                <td style="border: 1px solid #000; padding: 6px;">
+                  ${(m.oldWidth || m.oldHeight || m.oldFrameDepth || m.oldSide)
+                    ? `Ш: <strong>${this.esc(m.oldWidth || '—')}</strong> × В: <strong>${this.esc(m.oldHeight || '—')} мм</strong>, кор.: <strong>${this.esc(m.oldFrameDepth || '—')} мм</strong><br>Откр.: <strong>${this.esc(m.oldSide || '—')}</strong>`
+                    : '—'}
                 </td>
               </tr>
               <tr>
-                <td style="border: 1px solid #000; padding: 7px; font-weight: bold;">3. Размер по откосу</td>
-                <td style="border: 1px solid #000; padding: 7px;">
-                  Ширина по откосу: <strong>${this.esc(m.slopeWidth || '—')} мм</strong> &nbsp;|&nbsp;
-                  Высота по откосу: <strong>${this.esc(m.slopeHeight || '—')} мм</strong>
+                <td style="border: 1px solid #000; padding: 6px; font-weight: bold;">3. По откосу</td>
+                <td style="border: 1px solid #000; padding: 6px;">
+                  ${(m.slopeWidth || m.slopeHeight) ? `Ш: <strong>${this.esc(m.slopeWidth || '—')}</strong> × В: <strong>${this.esc(m.slopeHeight || '—')} мм</strong>` : '—'}
                 </td>
               </tr>
               <tr>
-                <td style="border: 1px solid #000; padding: 7px; font-weight: bold;">4. Рекомендуемая новая дверь</td>
-                <td style="border: 1px solid #000; padding: 7px; font-size: 13px;">
-                  Размер коробки: <strong>${this.esc(m.recWidth || '—')} × ${this.esc(m.recHeight || '—')} мм</strong> &nbsp;|&nbsp;
+                <td style="border: 1px solid #000; padding: 6px; font-weight: bold;">4. Новая дверь</td>
+                <td style="border: 1px solid #000; padding: 6px; font-size: 12.5px;">
+                  Коробка: <strong>${this.esc(m.recWidth || '—')} × ${this.esc(m.recHeight || '—')} мм</strong><br>
                   Открывание: <strong>${this.esc(m.recSide || '—')}</strong>
                 </td>
               </tr>
               <tr>
-                <td style="border: 1px solid #000; padding: 7px; font-weight: bold;">5. Вылет наличника</td>
-                <td style="border: 1px solid #000; padding: 7px;">
-                  Тип: <strong>${catText}</strong><br>
-                  Вылет за габарит коробки: <strong>${this.esc(m.casingProjection || '—')} мм</strong>
-                  ${(m.recWidth && m.recHeight && m.casingProjection) ? ` (габарит с наличником: <strong>${Number(m.recWidth) + Number(m.casingProjection)*2} × ${Number(m.recHeight) + Number(m.casingProjection)} мм</strong>)` : ''}
+                <td style="border: 1px solid #000; padding: 6px; font-weight: bold;">5. Наличник</td>
+                <td style="border: 1px solid #000; padding: 6px;">
+                  Вылет: <strong>${this.esc(m.casingProjection || '—')} мм</strong>
+                  ${(m.recWidth && m.recHeight && m.casingProjection) ? `<br>Габарит по наличнику: <strong>${Number(m.recWidth) + Number(m.casingProjection)*2} × ${Number(m.recHeight) + Number(m.casingProjection)} мм</strong>` : ''}
                 </td>
               </tr>
-            </tbody>
-          </table>
+            </table>
 
-          <div style="border: 1px solid #000; padding: 8px; min-height: 22mm; margin-bottom: 14px;">
-            <strong>Примечания и дополнительные работы:</strong><br>
-            ${this.esc(m.notes || '—')}
+            <div style="border: 1px solid #000; padding: 4px;">
+              ${this.renderMasterIllustration(m)}
+            </div>
+          </div>
+
+          <div style="border: 1px solid #000; padding: 6px; min-height: 16mm; margin-bottom: 10px; font-size: 11.5px;">
+            <strong>Примечания / Доп. работы:</strong> ${this.esc(m.notes || '—')}
           </div>
 
           ${photos.length > 0 ? `
-            <div style="margin-bottom: 14px;">
-              <strong style="display:block; margin-bottom: 6px;">Фотофиксация проёма:</strong>
-              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
-                ${photos.slice(0, 6).map(ph => `
-                  <img src="${ph.dataUrl}" style="width: 100%; height: 48mm; object-fit: cover; border: 1px solid #ccc;">
-                `).join('')}
+            <div style="margin-bottom: 10px;">
+              <strong style="display:block; margin-bottom: 4px; font-size: 11px;">Фотофиксация:</strong>
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;">
+                ${photos.slice(0, 4).map(ph => `<img src="${ph.dataUrl}" style="width: 100%; height: 34mm; object-fit: cover; border: 1px solid #999;">`).join('')}
               </div>
             </div>
           ` : ''}
 
-          <div style="display: flex; justify-content: space-between; margin-top: 24px; font-size: 12px;">
+          <div style="display: flex; justify-content: space-between; margin-top: 16px; font-size: 11.5px;">
             <div>Замер произвёл: _______________________</div>
-            <div>С результатами замера ознакомлен: _______________________</div>
+            <div>С замером ознакомлен: _______________________</div>
           </div>
         </div>
       `;
       AppCore.printHtml(html);
+    },
+
+    // Распознавание сфотографированного рукописного бланка (включая ФИО, телефон и адрес)
+    async processHandwrittenSheetPhoto(file, container) {
+      const statusBox = container.querySelector('#ocr-status-box');
+      const statusText = container.querySelector('#ocr-status-text');
+      statusBox.classList.remove('hidden');
+      statusText.textContent = '⏳ Обработка фото рукописного бланка...';
+
+      try {
+        const dataUrl = await this.compressImage(file, 1400, 0.85);
+        const m = AppCore.getState('ext_measure') || {};
+        const photos = Array.isArray(m.photos) ? [...m.photos] : [];
+        photos.unshift({ id: Date.now(), dataUrl });
+        AppCore.updateState('ext_measure', { photos });
+
+        const apiKey = localStorage.getItem('DOOR_ECO_GEMINI_KEY');
+        if (!apiKey) {
+          this.render(container, AppCore.getState());
+          alert('Фото бланка добавлено в замер! Чтобы программа сама считывала рукописный почерк и заполняла поля, нажмите кнопку «⚙️ Ключ ИИ» и укажите ключ Gemini.');
+          return;
+        }
+
+        statusText.textContent = '🤖 ИИ считывает рукописные данные клиента и размеры с бланка...';
+        const parsed = await this.parseWithGeminiVision(dataUrl, apiKey);
+
+        if (parsed) {
+          // Если на бланке от руки написаны ФИО, телефон или адрес — обновляем и карточку клиента
+          const clientPatch = {};
+          if (parsed.fullName) clientPatch.fullName = String(parsed.fullName).trim();
+          if (parsed.phone) clientPatch.phone = String(parsed.phone).trim();
+          if (parsed.address) clientPatch.address = String(parsed.address).trim();
+          if (parsed.floor) clientPatch.floor = String(parsed.floor).trim();
+          if (Object.keys(clientPatch).length > 0) {
+            AppCore.updateState('client', clientPatch);
+          }
+
+          const measurePatch = {};
+          const keys = ['openWidth','openHeight','openHeightOut','openHeightIn','wallDepth','oldWidth','oldHeight','oldFrameDepth','oldSide','slopeWidth','slopeHeight','recWidth','recHeight','recSide','doorCategory','casingProjection','notes'];
+          keys.forEach(k => {
+            if (parsed[k] !== undefined && parsed[k] !== null && String(parsed[k]).trim() !== '') {
+              measurePatch[k] = String(parsed[k]).trim();
+            }
+          });
+          if (measurePatch.openHeightOut || measurePatch.openHeightIn) measurePatch.diffLevel = true;
+
+          // Автоматически разворачиваем секции, если на бланке были заполнены их поля
+          if (measurePatch.oldWidth || measurePatch.oldHeight) this.uiCollapsed.oldDoor = false;
+          if (measurePatch.slopeWidth || measurePatch.slopeHeight) this.uiCollapsed.slope = false;
+          if (measurePatch.casingProjection) this.uiCollapsed.casing = false;
+
+          AppCore.updateState('ext_measure', measurePatch);
+          this.render(container, AppCore.getState());
+          alert('Рукописный бланк распознан! Данные перенесены в программу.');
+        }
+      } catch (err) {
+        statusBox.classList.add('hidden');
+        alert('Ошибка распознавания: ' + err.message);
+      }
+    },
+
+    async parseWithGeminiVision(dataUrl, apiKey) {
+      const base64Data = dataUrl.split(',')[1];
+      const prompt = `Проанализируй фото рукописного замерочного бланка входной двери и верни ТОЛЬКО чистый JSON (если поле не заполнено — пустая строка ""):
+      {
+        "fullName": "ФИО клиента от руки",
+        "phone": "телефон клиента",
+        "address": "адрес",
+        "floor": "этаж",
+        "openWidth": "число мм [Ш_ПРОЕМА]",
+        "openHeight": "число мм [В_ПРОЕМА]",
+        "openHeightOut": "число мм [В_СНАРУЖИ]",
+        "openHeightIn": "число мм [В_ВНУТРИ]",
+        "wallDepth": "число мм [Г_СТЕНЫ]",
+        "oldWidth": "число мм [СТ_Ш]",
+        "oldHeight": "число мм [СТ_В]",
+        "oldFrameDepth": "число мм [СТ_КОР]",
+        "oldSide": "Наружное Левое | Наружное Правое | Внутреннее Левое | Внутреннее Правое",
+        "slopeWidth": "число мм [ОТК_Ш]",
+        "slopeHeight": "число мм [ОТК_В]",
+        "recWidth": "число мм [НОВ_Ш]",
+        "recHeight": "число мм [НОВ_В]",
+        "recSide": "Наружное Левое | Наружное Правое | Внутреннее Левое | Внутреннее Правое",
+        "doorCategory": "outdoor | apartment",
+        "casingProjection": "число мм [НАЛИЧНИК]",
+        "notes": "примечания"
+      }`;
+
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'image/jpeg', data: base64Data } }] }]
+        })
+      });
+      if (!resp.ok) throw new Error('Проверьте API-ключ Gemini');
+      const json = await resp.json();
+      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      return JSON.parse(rawText.replace(/```json|```/g, '').trim());
     },
 
     compressImage(file, maxWidth, quality) {
